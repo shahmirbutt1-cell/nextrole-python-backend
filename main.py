@@ -7,6 +7,7 @@ import openai
 app = FastAPI()
 
 openai.api_key = os.getenv('OPENAI_API_KEY')
+print("OpenAI key loaded:", bool(os.getenv("OPENAI_API_KEY")))
 
 @app.get("/")
 def root():
