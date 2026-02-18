@@ -93,7 +93,81 @@ def replace_section_in_tables(doc, section_title, new_content):
                                 paragraphs[i + 1 + k].text = line
                         
                         return
+def extract_section_from_tables(doc, section_title):
+    """
+    Extract text under a section header inside table cells.
+    """
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                paragraphs = cell.paragraphs
 
+                for i, paragraph in enumerate(paragraphs):
+                    if section_title.upper() in paragraph.text.upper():
+                        section_lines = []
+                        j = i + 1
+                        while j < len(paragraphs) and paragraphs[j].text.strip():
+                            section_lines.append(paragraphs[j].text)
+                            j += 1
+                        return "\n".join(section_lines)
+    return ""
+
+
+def replace_section_preserve_format(doc, section_title, new_text):
+    """
+    Replace section content while preserving formatting & layout.
+    """
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                paragraphs = cell.paragraphs
+
+                for i, paragraph in enumerate(paragraphs):
+                    if section_title.upper() in paragraph.text.upper():
+
+                        # Identify existing section paragraphs
+                        j = i + 1
+                        section_paragraphs = []
+                        while j < len(paragraphs) and paragraphs[j].text.strip():
+                            section_paragraphs.append(paragraphs[j])
+                            j += 1
+
+                        new_lines = new_text.split("\n")
+
+                        for idx, p in enumerate(section_paragraphs):
+                            if idx < len(new_lines):
+                                replace_paragraph_preserve_runs(p, new_lines[idx])
+                            else:
+                                p.text = ""
+
+                        return
+
+
+def replace_paragraph_preserve_runs(paragraph, new_text):
+    """
+    Replace paragraph text but preserve run formatting.
+    """
+    if not paragraph.runs:
+        paragraph.add_run(new_text)
+        return
+
+    first_run = paragraph.runs[0]
+    font_name = first_run.font.name
+    font_size = first_run.font.size
+    bold = first_run.bold
+    italic = first_run.italic
+
+    # Clear existing runs
+    for run in paragraph.runs:
+        run.text = ""
+
+    # Insert new run with preserved formatting
+    new_run = paragraph.add_run(new_text)
+    new_run.font.name = font_name
+    new_run.font.size = font_size
+    new_run.bold = bold
+    new_run.italic = italic
+    
 from fastapi.responses import FileResponse
 import uuid
 
@@ -111,53 +185,61 @@ async def tailor_resume_docx_preserve(
 
     doc = Document(input_filename)
 
-    # Extract full text for AI
-    full_text = extract_text_from_docx(input_filename)
+    # Extract only relevant sections
+    profile_text = extract_section_from_tables(doc, "PROFILE")
+    skills_text = extract_section_from_tables(doc, "CORE COMPETENCIES")
 
-    prompt = f"""
-You are a professional resume editor.
+    # --- AI CALLS PER SECTION (Controlled & Precise) ---
 
-Return your response in this EXACT format:
+    # Rewrite Profile
+    profile_prompt = f"""
+Rewrite this professional summary to better match the job description.
+Keep similar length and tone. Do not invent experience.
 
-PROFILE:
-<improved summary>
-
-CORE COMPETENCIES:
-<improved skills list>
-
-Only rewrite those sections.
-Do not change layout or structure.
-
-Resume:
-{full_text}
+Summary:
+{profile_text}
 
 Job Description:
 {job_description}
 """
 
-    response = client.chat.completions.create(
+    profile_response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "You are an expert resume editor."},
-            {"role": "user", "content": prompt}
+            {"role": "user", "content": profile_prompt}
         ]
     )
 
-    tailored_text = response.choices[0].message.content
+    improved_profile = profile_response.choices[0].message.content.strip()
 
-    # --- Parse Sections ---
-    profile_text = ""
-    skills_text = ""
+    # Rewrite Skills
+    skills_prompt = f"""
+Improve these skills to better match the job description.
+Keep formatting as bullet-style lines.
+Do not invent skills not relevant.
 
-    if "PROFILE:" in tailored_text:
-        profile_text = tailored_text.split("PROFILE:")[1].split("CORE COMPETENCIES:")[0].strip()
+Skills:
+{skills_text}
 
-    if "CORE COMPETENCIES:" in tailored_text:
-        skills_text = tailored_text.split("CORE COMPETENCIES:")[1].strip()
+Job Description:
+{job_description}
+"""
 
-    # --- Replace Sections in Tables ---
-    replace_section_in_tables(doc, "PROFILE", profile_text)
-    replace_section_in_tables(doc, "CORE COMPETENCIES", skills_text)
+    skills_response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are an expert resume editor."},
+            {"role": "user", "content": skills_prompt}
+        ]
+    )
+
+    improved_skills = skills_response.choices[0].message.content.strip()
+
+    # --- Inject Back While Preserving Formatting ---
+
+    replace_section_preserve_format(doc, "PROFILE", improved_profile)
+    replace_section_preserve_format(doc, "CORE COMPETENCIES", improved_skills)
 
     doc.save(output_filename)
 
