@@ -278,11 +278,13 @@ Job Description:
 
                 new_skill_text = response.choices[0].message.content.strip()
 
-                replace_paragraph_text_preserve_style(paragraph, new_skill_text)
- doc.save(output_filename)
+                rreplace_paragraph_text_preserve_style(paragraph, new_skill_text)
 
-return FileResponse(
-    output_filename,
-    media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    filename="Tailored_Resume.docx"
-)               
+    # Save updated document
+    doc.save(output_filename)
+
+    return FileResponse(
+        output_filename,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename="Tailored_Resume.docx"
+    )
