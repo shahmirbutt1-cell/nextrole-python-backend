@@ -190,6 +190,10 @@ Job Description:
 
         new_profile_lines = response.choices[0].message.content.strip().split("\n")
 
+        # 🔒 Safety guard – enforce exact paragraph count
+        if len(new_profile_lines) != len(original_profile_lines):
+            new_profile_lines = original_profile_lines
+
         for i in range(len(profile_paragraphs)):
             if i < len(new_profile_lines):
                 replace_paragraph_text_preserve_style(
@@ -230,6 +234,10 @@ Job Description:
         )
 
         new_skill_lines = response.choices[0].message.content.strip().split("\n")
+
+        # Safety guard
+        if len(new_skill_lines) != len(original_skill_lines):
+            new_skill_lines = original_skill_lines
 
         for i in range(len(skills_paragraphs)):
             if i < len(new_skill_lines):
