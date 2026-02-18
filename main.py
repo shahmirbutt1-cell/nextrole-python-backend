@@ -31,6 +31,41 @@ def extract_text_from_docx(file_path):
 
     return "\n".join(full_text)
 
+    def get_section_paragraphs(doc, section_title):
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                paragraphs = cell.paragraphs
+                for i, paragraph in enumerate(paragraphs):
+                    if section_title.upper() in paragraph.text.upper():
+                        section_paragraphs = []
+                        j = i + 1
+                        while j < len(paragraphs) and paragraphs[j].text.strip():
+                            section_paragraphs.append(paragraphs[j])
+                            j += 1
+                        return section_paragraphs
+    return []
+
+    def replace_paragraph_text_preserve_style(paragraph, new_text):
+    if not paragraph.runs:
+        paragraph.add_run(new_text)
+        return
+
+    first_run = paragraph.runs[0]
+    font_name = first_run.font.name
+    font_size = first_run.font.size
+    bold = first_run.bold
+    italic = first_run.italic
+
+    for run in paragraph.runs:
+        run.text = ""
+
+    new_run = paragraph.add_run(new_text)
+    new_run.font.name = font_name
+    new_run.font.size = font_size
+    new_run.bold = bold
+    new_run.italic = italic
+
 
 @app.post("/analyze-resume")
 async def analyze_resume(file: UploadFile = File(...)):
@@ -179,67 +214,87 @@ async def tailor_resume_docx_preserve(
     input_filename = f"input_{uuid.uuid4()}.docx"
     output_filename = f"tailored_{uuid.uuid4()}.docx"
 
-    # Save uploaded file
+    # Save file
     with open(input_filename, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
     doc = Document(input_filename)
 
-    # Extract only relevant sections
-    profile_text = extract_section_from_tables(doc, "PROFILE")
-    skills_text = extract_section_from_tables(doc, "CORE COMPETENCIES")
+    # --- PROFILE SECTION ---
+    profile_paragraphs = get_section_paragraphs(doc, "PROFILE")
+    original_profile_lines = [p.text for p in profile_paragraphs]
 
-    # --- AI CALLS PER SECTION (Controlled & Precise) ---
+    if original_profile_lines:
+        profile_prompt = f"""
+Rewrite each line below individually to better match the job description.
 
-    # Rewrite Profile
-    profile_prompt = f"""
-Rewrite this professional summary to better match the job description.
-Keep similar length and tone. Do not invent experience.
+IMPORTANT:
+- Return EXACTLY {len(original_profile_lines)} lines.
+- Do not combine lines.
+- Do not add extra lines.
+- Keep similar length.
 
-Summary:
-{profile_text}
-
-Job Description:
-{job_description}
-"""
-
-    profile_response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are an expert resume editor."},
-            {"role": "user", "content": profile_prompt}
-        ]
-    )
-
-    improved_profile = profile_response.choices[0].message.content.strip()
-
-    # Rewrite Skills
-    skills_prompt = f"""
-Improve these skills to better match the job description.
-Keep formatting as bullet-style lines.
-Do not invent skills not relevant.
-
-Skills:
-{skills_text}
+Lines:
+{chr(10).join(original_profile_lines)}
 
 Job Description:
 {job_description}
 """
 
-    skills_response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are an expert resume editor."},
-            {"role": "user", "content": skills_prompt}
-        ]
-    )
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert resume editor."},
+                {"role": "user", "content": profile_prompt}
+            ]
+        )
 
-    improved_skills = skills_response.choices[0].message.content.strip()
+        new_profile_lines = response.choices[0].message.content.strip().split("\n")
 
-    # --- Inject Back While Preserving Formatting ---
+        for i in range(len(profile_paragraphs)):
+            if i < len(new_profile_lines):
+                replace_paragraph_text_preserve_style(
+                    profile_paragraphs[i],
+                    new_profile_lines[i]
+                )
 
-    replace_section_preserve_format(doc, "PROFILE", improved_profile)
-    replace_section_preserve_format(doc, "CORE COMPETENCIES", improved_skills)
+    # --- CORE COMPETENCIES SECTION ---
+    skills_paragraphs = get_section_paragraphs(doc, "CORE COMPETENCIES")
+    original_skill_lines = [p.text for p in skills_paragraphs]
+
+    if original_skill_lines:
+        skills_prompt = f"""
+Rewrite each skill line individually.
+
+IMPORTANT:
+- Return EXACTLY {len(original_skill_lines)} lines.
+- Keep bullet-style structure.
+- Do not combine lines.
+- Do not add extra lines.
+
+Lines:
+{chr(10).join(original_skill_lines)}
+
+Job Description:
+{job_description}
+"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert resume editor."},
+                {"role": "user", "content": skills_prompt}
+            ]
+        )
+
+        new_skill_lines = response.choices[0].message.content.strip().split("\n")
+
+        for i in range(len(skills_paragraphs)):
+            if i < len(new_skill_lines):
+                replace_paragraph_text_preserve_style(
+                    skills_paragraphs[i],
+                    new_skill_lines[i]
+                )
 
     doc.save(output_filename)
 
