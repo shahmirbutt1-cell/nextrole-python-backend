@@ -7,7 +7,7 @@ from openai import OpenAI
 
 app = FastAPI()
 
-client = OpenAI()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 @app.get("/")
@@ -72,7 +72,7 @@ async def match_job(data: dict = Body(...)):
     }
 
 
-rom fastapi.responses import FileResponse
+from fastapi.responses import FileResponse
 import uuid
 
 @app.post("/tailor-resume-docx-preserve")
