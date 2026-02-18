@@ -71,6 +71,28 @@ async def match_job(data: dict = Body(...)):
         "missing_skills": list(missing)[:10]
     }
 
+def replace_section_in_tables(doc, section_title, new_content):
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                paragraphs = cell.paragraphs
+
+                for i, paragraph in enumerate(paragraphs):
+                    if section_title.upper() in paragraph.text.upper():
+                        
+                        # Clear existing content below header
+                        j = i + 1
+                        while j < len(paragraphs) and paragraphs[j].text.strip():
+                            paragraphs[j].text = ""
+                            j += 1
+                        
+                        # Insert new content
+                        lines = new_content.split("\n")
+                        for k, line in enumerate(lines):
+                            if i + 1 + k < len(paragraphs):
+                                paragraphs[i + 1 + k].text = line
+                        
+                        return
 
 from fastapi.responses import FileResponse
 import uuid
@@ -95,25 +117,22 @@ async def tailor_resume_docx_preserve(
     prompt = f"""
 You are a professional resume editor.
 
-Rewrite ONLY:
-- Professional Summary
-- Skills section
-- Improve relevant bullet points in Experience
+Return your response in this EXACT format:
 
-Do NOT change:
-- Job titles
-- Company names
-- Dates
-- Layout
-- Formatting
+PROFILE:
+<improved summary>
+
+CORE COMPETENCIES:
+<improved skills list>
+
+Only rewrite those sections.
+Do not change layout or structure.
 
 Resume:
 {full_text}
 
 Job Description:
 {job_description}
-
-Return only the improved resume text.
 """
 
     response = client.chat.completions.create(
@@ -126,13 +145,19 @@ Return only the improved resume text.
 
     tailored_text = response.choices[0].message.content
 
-    # Split AI text into lines
-    tailored_lines = tailored_text.split("\n")
+    # --- Parse Sections ---
+    profile_text = ""
+    skills_text = ""
 
-    # Replace paragraph text but keep formatting
-    for i, paragraph in enumerate(doc.paragraphs):
-        if i < len(tailored_lines) and tailored_lines[i].strip():
-            paragraph.text = tailored_lines[i]
+    if "PROFILE:" in tailored_text:
+        profile_text = tailored_text.split("PROFILE:")[1].split("CORE COMPETENCIES:")[0].strip()
+
+    if "CORE COMPETENCIES:" in tailored_text:
+        skills_text = tailored_text.split("CORE COMPETENCIES:")[1].strip()
+
+    # --- Replace Sections in Tables ---
+    replace_section_in_tables(doc, "PROFILE", profile_text)
+    replace_section_in_tables(doc, "CORE COMPETENCIES", skills_text)
 
     doc.save(output_filename)
 
