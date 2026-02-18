@@ -30,21 +30,54 @@ def extract_text_from_docx(file_path):
 
     return "\n".join(full_text)
 
-def get_section_paragraphs(doc, section_title):
+def get_section_paragraphs_universal(doc, section_aliases):
+    """
+    Detect section paragraphs in BOTH:
+    - Table-based resumes
+    - Standard paragraph resumes
+    """
+
+    # Normalize aliases
+    section_aliases = [alias.upper() for alias in section_aliases]
+
+    # --------------------------
+    # 1️⃣ TABLE-BASED DETECTION
+    # --------------------------
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 paragraphs = cell.paragraphs
+
                 for i, paragraph in enumerate(paragraphs):
-                    if section_title.upper() in paragraph.text.upper():
+                    if paragraph.text.strip().upper() in section_aliases:
+
                         section_paragraphs = []
                         j = i + 1
                         while j < len(paragraphs) and paragraphs[j].text.strip():
                             section_paragraphs.append(paragraphs[j])
                             j += 1
-                        return section_paragraphs
-    return []
 
+                        if section_paragraphs:
+                            return section_paragraphs
+
+    # --------------------------
+    # 2️⃣ PARAGRAPH-BASED DETECTION
+    # --------------------------
+    paragraphs = doc.paragraphs
+
+    for i, paragraph in enumerate(paragraphs):
+        if paragraph.text.strip().upper() in section_aliases:
+
+            section_paragraphs = []
+            j = i + 1
+            while j < len(paragraphs) and paragraphs[j].text.strip():
+                section_paragraphs.append(paragraphs[j])
+                j += 1
+
+            if section_paragraphs:
+                return section_paragraphs
+
+    return []
 
 def replace_paragraph_text_preserve_style(paragraph, new_text):
     if not paragraph.runs:
@@ -124,7 +157,10 @@ async def tailor_resume_docx_preserve(
     doc = Document(input_filename)
 
     # --- PROFILE SECTION ---
-    profile_paragraphs = get_section_paragraphs(doc, "PROFILE")
+    profile_paragraphs = get_section_paragraphs_universal(
+    doc,
+    ["PROFILE", "PROFESSIONAL SUMMARY", "SUMMARY", "OBJECTIVE"]
+    )
     original_profile_lines = [p.text for p in profile_paragraphs]
 
     if original_profile_lines:
@@ -162,7 +198,10 @@ Job Description:
                 )
 
     # --- CORE COMPETENCIES SECTION ---
-    skills_paragraphs = get_section_paragraphs(doc, "CORE COMPETENCIES")
+    skills_paragraphs = get_section_paragraphs_universal(
+    doc,
+    ["CORE COMPETENCIES", "SKILLS", "TECHNICAL SKILLS", "KEY SKILLS"]
+    )
     original_skill_lines = [p.text for p in skills_paragraphs]
 
     if original_skill_lines:
