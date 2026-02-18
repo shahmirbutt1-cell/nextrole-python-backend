@@ -9,6 +9,7 @@ app = FastAPI()
 
 client = OpenAI()
 
+
 @app.get("/")
 def root():
     return {"status": "NextRole Python backend running"}
@@ -16,7 +17,6 @@ def root():
 
 def extract_text_from_docx(file_path):
     doc = Document(file_path)
-
     full_text = []
 
     for paragraph in doc.paragraphs:
@@ -34,7 +34,6 @@ def extract_text_from_docx(file_path):
 
 @app.post("/analyze-resume")
 async def analyze_resume(file: UploadFile = File(...)):
-
     temp_file = f"temp_{file.filename}"
 
     with open(temp_file, "wb") as buffer:
@@ -48,8 +47,7 @@ async def analyze_resume(file: UploadFile = File(...)):
         "preview": extracted_text[:300],
         "full_text": extracted_text
     }
-from fastapi import Body
-import re
+
 
 @app.post("/match-job")
 async def match_job(data: dict = Body(...)):
@@ -80,32 +78,32 @@ async def tailor_resume(data: dict = Body(...)):
     job_description = data.get("job_description", "")
 
     prompt = f"""
-    You are an expert resume editor.
+You are an expert resume editor.
 
-    Keep formatting structure intact.
-    Only improve:
-    - Professional Summary
-    - Skills section
-    - Relevant bullet points
+Keep formatting structure intact.
+Only improve:
+- Professional Summary
+- Skills section
+- Relevant bullet points
 
-    Resume:
-    {resume_text}
+Resume:
+{resume_text}
 
-    Job Description:
-    {job_description}
+Job Description:
+{job_description}
 
-    Return the full improved resume text.
-    """
+Return the full improved resume text.
+"""
 
     response = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[
-        {"role": "system", "content": "You are an expert resume editor."},
-        {"role": "user", "content": prompt}
-    ]
-)
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are an expert resume editor."},
+            {"role": "user", "content": prompt}
+        ]
+    )
 
-tailored_text = response.choices[0].message.content
+    tailored_text = response.choices[0].message.content
 
     return {
         "tailored_resume": tailored_text
