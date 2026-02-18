@@ -206,50 +206,75 @@ Job Description:
     doc,
     ["CORE COMPETENCIES", "SKILLS", "TECHNICAL SKILLS", "KEY SKILLS"]
     )
+
     original_skill_lines = [p.text for p in skills_paragraphs]
 
     if original_skill_lines:
-        skills_prompt = f"""
-Rewrite each skill line individually.
+
+    for idx, paragraph in enumerate(skills_paragraphs):
+
+        original_text = paragraph.text.strip()
+
+        # Detect comma-separated structure
+        if "," in original_text:
+
+            skills_list = [s.strip() for s in original_text.split(",") if s.strip()]
+
+            skills_prompt = f"""
+Improve each skill below to better align with the job description.
 
 IMPORTANT:
-- Return EXACTLY {len(original_skill_lines)} lines.
-- Keep bullet-style structure.
-- Do not combine lines.
-- Do not add extra lines.
+- Keep EXACT same number of skills.
+- Return as comma-separated list.
+- Do NOT add or remove skills.
+- Keep concise.
 
-Lines:
-{chr(10).join(original_skill_lines)}
+Skills:
+{", ".join(skills_list)}
 
 Job Description:
 {job_description}
 """
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are an expert resume editor."},
-                {"role": "user", "content": skills_prompt}
-            ]
-        )
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are an expert resume optimizer."},
+                    {"role": "user", "content": skills_prompt}
+                ]
+            )
 
-        new_skill_lines = response.choices[0].message.content.strip().split("\n")
+            new_skills_text = response.choices[0].message.content.strip()
 
-        # Safety guard
-        if len(new_skill_lines) != len(original_skill_lines):
-            new_skill_lines = original_skill_lines
+            new_skills_list = [s.strip() for s in new_skills_text.split(",") if s.strip()]
 
-        for i in range(len(skills_paragraphs)):
-            if i < len(new_skill_lines):
-                replace_paragraph_text_preserve_style(
-                    skills_paragraphs[i],
-                    new_skill_lines[i]
-                )
+            if len(new_skills_list) != len(skills_list):
+                new_skills_list = skills_list
 
-    doc.save(output_filename)
+            final_text = ", ".join(new_skills_list)
 
-    return FileResponse(
-        output_filename,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename="Tailored_Resume.docx"
-    )
+            replace_paragraph_text_preserve_style(paragraph, final_text)
+
+        else:
+            skills_prompt = f"""
+Improve the following skill line to better match the job description.
+Keep structure similar.
+
+Skill:
+{original_text}
+
+Job Description:
+{job_description}
+"""
+
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are an expert resume optimizer."},
+                    {"role": "user", "content": skills_prompt}
+                ]
+            )
+
+            new_skill_text = response.choices[0].message.content.strip()
+
+            replace_paragraph_text_preserve_style(paragraph, new_skill_text)
