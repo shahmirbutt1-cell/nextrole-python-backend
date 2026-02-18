@@ -203,24 +203,24 @@ Job Description:
 
     # --- CORE COMPETENCIES SECTION ---
     skills_paragraphs = get_section_paragraphs_universal(
-    doc,
-    ["CORE COMPETENCIES", "SKILLS", "TECHNICAL SKILLS", "KEY SKILLS"]
+        doc,
+        ["CORE COMPETENCIES", "SKILLS", "TECHNICAL SKILLS", "KEY SKILLS"]
     )
 
     original_skill_lines = [p.text for p in skills_paragraphs]
 
     if original_skill_lines:
 
-    for idx, paragraph in enumerate(skills_paragraphs):
+        for idx, paragraph in enumerate(skills_paragraphs):
 
-        original_text = paragraph.text.strip()
+            original_text = paragraph.text.strip()
 
-        # Detect comma-separated structure
-        if "," in original_text:
+            # Detect comma-separated structure
+            if "," in original_text:
 
-            skills_list = [s.strip() for s in original_text.split(",") if s.strip()]
+                skills_list = [s.strip() for s in original_text.split(",") if s.strip()]
 
-            skills_prompt = f"""
+                skills_prompt = f"""
 Improve each skill below to better align with the job description.
 
 IMPORTANT:
@@ -236,27 +236,28 @@ Job Description:
 {job_description}
 """
 
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are an expert resume optimizer."},
-                    {"role": "user", "content": skills_prompt}
-                ]
-            )
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are an expert resume optimizer."},
+                        {"role": "user", "content": skills_prompt}
+                    ]
+                )
 
-            new_skills_text = response.choices[0].message.content.strip()
+                new_skills_text = response.choices[0].message.content.strip()
 
-            new_skills_list = [s.strip() for s in new_skills_text.split(",") if s.strip()]
+                new_skills_list = [s.strip() for s in new_skills_text.split(",") if s.strip()]
 
-            if len(new_skills_list) != len(skills_list):
-                new_skills_list = skills_list
+                if len(new_skills_list) != len(skills_list):
+                    new_skills_list = skills_list
 
-            final_text = ", ".join(new_skills_list)
+                final_text = ", ".join(new_skills_list)
 
-            replace_paragraph_text_preserve_style(paragraph, final_text)
+                replace_paragraph_text_preserve_style(paragraph, final_text)
 
-        else:
-            skills_prompt = f"""
+            else:
+
+                skills_prompt = f"""
 Improve the following skill line to better match the job description.
 Keep structure similar.
 
@@ -267,14 +268,21 @@ Job Description:
 {job_description}
 """
 
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are an expert resume optimizer."},
-                    {"role": "user", "content": skills_prompt}
-                ]
-            )
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are an expert resume optimizer."},
+                        {"role": "user", "content": skills_prompt}
+                    ]
+                )
 
-            new_skill_text = response.choices[0].message.content.strip()
+                new_skill_text = response.choices[0].message.content.strip()
 
-            replace_paragraph_text_preserve_style(paragraph, new_skill_text)
+                replace_paragraph_text_preserve_style(paragraph, new_skill_text)
+ doc.save(output_filename)
+
+return FileResponse(
+    output_filename,
+    media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    filename="Tailored_Resume.docx"
+)               
