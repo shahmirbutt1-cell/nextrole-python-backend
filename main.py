@@ -1,13 +1,13 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Body
 from docx import Document
 import shutil
 import os
-import openai
+import re
+from openai import OpenAI
 
 app = FastAPI()
 
-openai.api_key = os.getenv('OPENAI_API_KEY')
-print("OpenAI key loaded:", bool(os.getenv("OPENAI_API_KEY")))
+client = OpenAI()
 
 @app.get("/")
 def root():
@@ -97,15 +97,15 @@ async def tailor_resume(data: dict = Body(...)):
     Return the full improved resume text.
     """
 
-    response = openai.ChatCompletion.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are an expert resume editor."},
-            {"role": "user", "content": prompt}
-        ]
-    )
+    response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[
+        {"role": "system", "content": "You are an expert resume editor."},
+        {"role": "user", "content": prompt}
+    ]
+)
 
-    tailored_text = response.choices[0].message["content"]
+tailored_text = response.choices[0].message.content
 
     return {
         "tailored_resume": tailored_text
