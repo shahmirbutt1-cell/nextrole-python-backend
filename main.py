@@ -99,6 +99,46 @@ def replace_paragraph_text_preserve_style(paragraph, new_text):
     new_run.bold = bold
     new_run.italic = italic
 
+def get_experience_roles(doc):
+    """
+    Detect experience section and group bullet paragraphs under each job role.
+    Returns list of roles with bullet paragraph objects.
+    """
+
+    roles = []
+    in_experience = False
+    current_role = None
+
+    for paragraph in doc.paragraphs:
+        text = paragraph.text.strip()
+
+        # Detect experience header
+        if text.upper() in ["WORK EXPERIENCE", "EXPERIENCE", "PROFESSIONAL EXPERIENCE"]:
+            in_experience = True
+            continue
+
+        if in_experience:
+
+            # Detect job title line (heuristic: contains company dash or bold text)
+            if paragraph.runs and paragraph.runs[0].bold:
+                if current_role:
+                    roles.append(current_role)
+
+                current_role = {
+                    "title": text,
+                    "bullets": []
+                }
+
+            # Detect bullet paragraph
+            elif paragraph.style.name.startswith("List") or text.startswith("•") or text.startswith("-"):
+                if current_role:
+                    current_role["bullets"].append(paragraph)
+
+    if current_role:
+        roles.append(current_role)
+
+    return roles
+
 @app.post("/analyze-resume")
 async def analyze_resume(file: UploadFile = File(...)):
     temp_file = f"temp_{file.filename}"
@@ -158,8 +198,8 @@ async def tailor_resume_docx_preserve(
 
     # --- PROFILE SECTION ---
     profile_paragraphs = get_section_paragraphs_universal(
-    doc,
-    ["PROFILE", "PROFESSIONAL SUMMARY", "SUMMARY", "OBJECTIVE"]
+        doc,
+        ["PROFILE", "PROFESSIONAL SUMMARY", "SUMMARY", "OBJECTIVE"]
     )
     original_profile_lines = [p.text for p in profile_paragraphs]
 
@@ -278,8 +318,58 @@ Job Description:
 
                 new_skill_text = response.choices[0].message.content.strip()
 
-                rreplace_paragraph_text_preserve_style(paragraph, new_skill_text)
+                replace_paragraph_text_preserve_style(paragraph, new_skill_text)
 
+
+    # --- EXPERIENCE BULLET TARGETING ---
+    roles = get_experience_roles(doc)
+
+    if roles:
+
+        # For now: target first role (most recent)
+        target_role = roles[0]
+        bullet_paragraphs = target_role["bullets"]
+
+        original_bullets = [p.text.strip() for p in bullet_paragraphs]
+
+        if original_bullets:
+
+            bullets_prompt = f"""
+Rewrite each bullet point below to better align with the job description.
+
+IMPORTANT:
+- Return EXACTLY {len(original_bullets)} bullets.
+- Do not combine bullets.
+- Do not remove bullets.
+- Keep bullet structure.
+- Do not change dates or job titles.
+
+Bullets:
+{chr(10).join(original_bullets)}
+
+Job Description:
+{job_description}
+"""
+
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are an expert resume optimizer."},
+                    {"role": "user", "content": bullets_prompt}
+                ]
+            )
+
+            new_bullets = response.choices[0].message.content.strip().split("\n")
+
+            # Safety guard
+            if len(new_bullets) != len(original_bullets):
+                new_bullets = original_bullets
+
+            for i in range(len(bullet_paragraphs)):
+                replace_paragraph_text_preserve_style(
+                    bullet_paragraphs[i],
+                    new_bullets[i]
+                )
     # Save updated document
     doc.save(output_filename)
 
