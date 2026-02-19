@@ -159,6 +159,18 @@ def role_relevance_score(role, job_keywords):
 
     return len(overlap)
 
+def detect_industry_keywords(text):
+    finance_terms = {"finance","financial","accounting","budget","forecast","p&l","audit"}
+    medical_terms = {"medical","device","orthopedic","trauma","surgical","hospital"}
+    tech_terms = {"software","saas","cloud","api","engineering","data","ai"}
+
+    text_words = set(re.findall(r'\b\w+\b', text.lower()))
+
+    return {
+        "finance": len(text_words.intersection(finance_terms)),
+        "medical": len(text_words.intersection(medical_terms)),
+        "tech": len(text_words.intersection(tech_terms))
+    }
 
 @app.post("/analyze-resume")
 async def analyze_resume(file: UploadFile = File(...)):
@@ -208,34 +220,54 @@ async def tailor_resume_docx_preserve(
     file: UploadFile = File(...),
     job_description: str = Body(...)
 ):
+
     input_filename = f"input_{uuid.uuid4()}.docx"
     output_filename = f"tailored_{uuid.uuid4()}.docx"
 
-    # Save file
     with open(input_filename, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
     doc = Document(input_filename)
 
-    # --- PROFILE SECTION ---
+    # -------- INDUSTRY DETECTION --------
+    resume_text = extract_text_from_docx(input_filename)
+
+    resume_industry = detect_industry_keywords(resume_text)
+    job_industry = detect_industry_keywords(job_description)
+
+    if max(resume_industry.values()) == 0 or max(job_industry.values()) == 0:
+        industry_mismatch = False
+    else:
+        resume_primary = max(resume_industry, key=resume_industry.get)
+        job_primary = max(job_industry, key=job_industry.get)
+        industry_mismatch = resume_primary != job_primary
+
+    mode = "conservative" if industry_mismatch else "balanced"
+
+    # ================= PROFILE =================
     profile_paragraphs = get_section_paragraphs_universal(
         doc,
         ["PROFILE", "PROFESSIONAL SUMMARY", "SUMMARY", "OBJECTIVE"]
     )
-    original_profile_lines = [p.text for p in profile_paragraphs]
 
-    if original_profile_lines:
-        profile_prompt = f"""
-Rewrite each line below individually to better match the job description.
+    if profile_paragraphs:
+        original_lines = [p.text.strip() for p in profile_paragraphs]
 
-IMPORTANT:
-- Return EXACTLY {len(original_profile_lines)} lines.
-- Do not combine lines.
-- Do not add extra lines.
-- Keep similar length.
+        prompt = f"""
+Rewrite each line individually.
+
+MODE: {mode}
+
+STRICT RULES:
+- Do NOT invent achievements
+- Do NOT fabricate metrics
+- Do NOT change industries
+- Only strengthen wording
+
+Return EXACTLY {len(original_lines)} lines.
 
 Lines:
-{chr(10).join(original_profile_lines)}
+{chr(10).join(original_lines)}
 
 Job Description:
 {job_description}
@@ -245,82 +277,41 @@ Job Description:
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are an expert resume editor."},
-                {"role": "user", "content": profile_prompt}
+                {"role": "user", "content": prompt}
             ]
         )
 
-        new_profile_lines = response.choices[0].message.content.strip().split("\n")
+        new_lines = response.choices[0].message.content.strip().split("\n")
 
-        # 🔒 Safety guard – enforce exact paragraph count
-        if len(new_profile_lines) != len(original_profile_lines):
-            new_profile_lines = original_profile_lines
+        if len(new_lines) != len(original_lines):
+            new_lines = original_lines
 
         for i in range(len(profile_paragraphs)):
-            if i < len(new_profile_lines):
-                replace_paragraph_text_preserve_style(
-                    profile_paragraphs[i],
-                    new_profile_lines[i]
-                )
+            replace_paragraph_text_preserve_style(profile_paragraphs[i], new_lines[i])
 
-    # --- CORE COMPETENCIES SECTION ---
+    # ================= SKILLS =================
     skills_paragraphs = get_section_paragraphs_universal(
         doc,
         ["CORE COMPETENCIES", "SKILLS", "TECHNICAL SKILLS", "KEY SKILLS"]
     )
 
-    original_skill_lines = [p.text for p in skills_paragraphs]
+    for paragraph in skills_paragraphs:
 
-    if original_skill_lines:
+        original_text = paragraph.text.strip()
 
-        for idx, paragraph in enumerate(skills_paragraphs):
+        if not original_text:
+            continue
 
-            original_text = paragraph.text.strip()
+        prompt = f"""
+Improve this skill line.
 
-            # Detect comma-separated structure
-            if "," in original_text:
+MODE: {mode}
 
-                skills_list = [s.strip() for s in original_text.split(",") if s.strip()]
-
-                skills_prompt = f"""
-Improve each skill below to better align with the job description.
-
-IMPORTANT:
-- Keep EXACT same number of skills.
-- Return as comma-separated list.
-- Do NOT add or remove skills.
-- Keep concise.
-
-Skills:
-{", ".join(skills_list)}
-
-Job Description:
-{job_description}
-"""
-
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": "You are an expert resume optimizer."},
-                        {"role": "user", "content": skills_prompt}
-                    ]
-                )
-
-                new_skills_text = response.choices[0].message.content.strip()
-
-                new_skills_list = [s.strip() for s in new_skills_text.split(",") if s.strip()]
-
-                if len(new_skills_list) != len(skills_list):
-                    new_skills_list = skills_list
-
-                final_text = ", ".join(new_skills_list)
-
-                replace_paragraph_text_preserve_style(paragraph, final_text)
-
-            else:
-
-                skills_prompt = f"""
-Improve the following skill line to better match the job description.
-Keep structure similar.
+STRICT RULES:
+- Do NOT add new skills
+- Do NOT remove skills
+- Do NOT change industry
+- Keep structure similar
 
 Skill:
 {original_text}
@@ -329,55 +320,48 @@ Job Description:
 {job_description}
 """
 
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": "You are an expert resume optimizer."},
-                        {"role": "user", "content": skills_prompt}
-                    ]
-                )
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert resume optimizer."},
+                {"role": "user", "content": prompt}
+            ]
+        )
 
-                new_skill_text = response.choices[0].message.content.strip()
+        new_text = response.choices[0].message.content.strip()
 
-                replace_paragraph_text_preserve_style(paragraph, new_skill_text)
+        replace_paragraph_text_preserve_style(paragraph, new_text)
 
-
-    # --- EXPERIENCE BULLET TARGETING ---
+    # ================= EXPERIENCE =================
     roles = get_experience_roles(doc)
+    job_keywords = extract_keywords(job_description)
 
-    if roles:
+    for role in roles:
 
-        job_keywords = extract_keywords(job_description)
+        score = role_relevance_score(role, job_keywords)
 
-        scored_roles = []
-        for role in roles:
-            score = role_relevance_score(role, job_keywords)
-            scored_roles.append((role, score))
+        if score < 3:
+            continue
 
-        scored_roles.sort(key=lambda x: x[1], reverse=True)
+        bullet_paragraphs = role["bullets"]
+        original_bullets = [p.text.strip() for p in bullet_paragraphs]
 
-        RELEVANCE_THRESHOLD = 3
+        if not original_bullets:
+            continue
 
-        for role, score in scored_roles:
+        prompt = f"""
+Rewrite each bullet individually.
 
-            if score < RELEVANCE_THRESHOLD:
-                continue
+MODE: {mode}
 
-            bullet_paragraphs = role["bullets"]
-            original_bullets = [p.text.strip() for p in bullet_paragraphs]
+STRICT RULES:
+- Do NOT invent responsibilities
+- Do NOT fabricate metrics
+- Do NOT change industry
+- Do NOT change companies or dates
+- Only strengthen wording
 
-            if not original_bullets:
-                continue
-
-            bullets_prompt = f"""
-Rewrite each bullet point below to better align with the job description.
-
-IMPORTANT:
-- Return EXACTLY {len(original_bullets)} bullets.
-- Do not combine bullets.
-- Do not remove bullets.
-- Keep bullet structure.
-- Do not change dates or job titles.
+Return EXACTLY {len(original_bullets)} bullets.
 
 Bullets:
 {chr(10).join(original_bullets)}
@@ -386,26 +370,29 @@ Job Description:
 {job_description}
 """
 
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are an expert resume optimizer."},
-                    {"role": "user", "content": bullets_prompt}
-                ]
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert resume optimizer."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        new_bullets = response.choices[0].message.content.strip().split("\n")
+
+        if len(new_bullets) != len(original_bullets):
+            new_bullets = original_bullets
+
+        for i in range(len(bullet_paragraphs)):
+            replace_paragraph_text_preserve_style(
+                bullet_paragraphs[i],
+                new_bullets[i]
             )
 
-            new_bullets = response.choices[0].message.content.strip().split("\n")
-
-            if len(new_bullets) != len(original_bullets):
-                new_bullets = original_bullets
-
-            for i in range(len(bullet_paragraphs)):
-                replace_paragraph_text_preserve_style(
-                    bullet_paragraphs[i],
-                    new_bullets[i]
-                )
-    # Save updated document
     doc.save(output_filename)
+
+    if os.path.exists(input_filename):
+        os.remove(input_filename)
 
     return FileResponse(
         output_filename,
