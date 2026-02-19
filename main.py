@@ -139,6 +139,27 @@ def get_experience_roles(doc):
 
     return roles
 
+def extract_keywords(text):
+    words = re.findall(r'\b\w+\b', text.lower())
+    stopwords = {
+        "the","and","with","for","from","that","this","have","has",
+        "are","was","were","will","shall","your","their","about",
+        "into","within","across","using","use","used"
+    }
+    return set(w for w in words if len(w) > 3 and w not in stopwords)
+
+def role_relevance_score(role, job_keywords):
+    role_text = " ".join([p.text for p in role["bullets"]]).lower()
+    role_words = set(re.findall(r'\b\w+\b', role_text))
+
+    overlap = role_words.intersection(job_keywords)
+
+    if not role_words:
+        return 0
+
+    return len(overlap)
+
+
 @app.post("/analyze-resume")
 async def analyze_resume(file: UploadFile = File(...)):
     temp_file = f"temp_{file.filename}"
@@ -322,19 +343,35 @@ Job Description:
 
 
     # --- EXPERIENCE BULLET TARGETING ---
-    roles = get_experience_roles(doc)
+roles = get_experience_roles(doc)
 
-    if roles:
+if roles:
 
-        # For now: target first role (most recent)
-        target_role = roles[0]
-        bullet_paragraphs = target_role["bullets"]
+    job_keywords = extract_keywords(job_description)
 
+    # Score roles
+    scored_roles = []
+    for role in roles:
+        score = role_relevance_score(role, job_keywords)
+        scored_roles.append((role, score))
+
+    # Sort highest relevance first
+    scored_roles.sort(key=lambda x: x[1], reverse=True)
+
+    RELEVANCE_THRESHOLD = 3
+
+    for role, score in scored_roles:
+
+        if score < RELEVANCE_THRESHOLD:
+            continue
+
+        bullet_paragraphs = role["bullets"]
         original_bullets = [p.text.strip() for p in bullet_paragraphs]
 
-        if original_bullets:
+        if not original_bullets:
+            continue
 
-            bullets_prompt = f"""
+        bullets_prompt = f"""
 Rewrite each bullet point below to better align with the job description.
 
 IMPORTANT:
@@ -351,25 +388,24 @@ Job Description:
 {job_description}
 """
 
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are an expert resume optimizer."},
-                    {"role": "user", "content": bullets_prompt}
-                ]
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert resume optimizer."},
+                {"role": "user", "content": bullets_prompt}
+            ]
+        )
+
+        new_bullets = response.choices[0].message.content.strip().split("\n")
+
+        if len(new_bullets) != len(original_bullets):
+            new_bullets = original_bullets
+
+        for i in range(len(bullet_paragraphs)):
+            replace_paragraph_text_preserve_style(
+                bullet_paragraphs[i],
+                new_bullets[i]
             )
-
-            new_bullets = response.choices[0].message.content.strip().split("\n")
-
-            # Safety guard
-            if len(new_bullets) != len(original_bullets):
-                new_bullets = original_bullets
-
-            for i in range(len(bullet_paragraphs)):
-                replace_paragraph_text_preserve_style(
-                    bullet_paragraphs[i],
-                    new_bullets[i]
-                )
     # Save updated document
     doc.save(output_filename)
 
