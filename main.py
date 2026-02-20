@@ -215,6 +215,17 @@ async def match_job(data: dict = Body(...)):
 from fastapi.responses import FileResponse
 import uuid
 
+@app.post("/debug-parse")
+async def debug_parse(file: UploadFile = File(...)):
+    input_filename = "temp.docx"
+    with open(input_filename, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    parser = SemanticResumeParser(input_filename, openai_client=client)
+    model = parser.parse()
+
+    return model
+
 @app.post("/tailor-resume-docx-preserve")
 async def tailor_resume_docx_preserve(
     file: UploadFile = File(...),
@@ -227,6 +238,10 @@ async def tailor_resume_docx_preserve(
     # Save uploaded file
     with open(input_filename, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
+    
+    # Parse structure
+    parser = SemanticResumeParser(input_filename, openai_client=client)
+    resume_model = parser.parse()
 
     doc = Document(input_filename)
 
