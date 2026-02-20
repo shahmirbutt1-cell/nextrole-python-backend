@@ -220,6 +220,7 @@ import uuid
 @app.post("/debug-parse")
 async def debug_parse(file: UploadFile = File(...)):
     input_filename = "temp.docx"
+
     with open(input_filename, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
@@ -227,9 +228,12 @@ async def debug_parse(file: UploadFile = File(...)):
     model = parser.parse()
 
     print("==== PARSE DEBUG ====")
-    print("Summary:", resume_model.get("summary"))
-    print("Skills count:", len(resume_model.get("skills", [])))
-    print("Experience roles:", len(resume_model.get("experience", [])))
+    print("Summary:", model.get("summary"))
+    print("Skills count:", len(model.get("skills", [])))
+    print("Experience roles:", len(model.get("experience", [])))
+    print("==== PARSE DEBUG END ====")
+
+    return model
     
 
     return model
@@ -246,11 +250,21 @@ async def tailor_resume_docx_preserve(
     with open(input_filename, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # STEP 1 — Parse
-    parser = SemanticResumeParser(input_filename, openai_client=client)
+    # ✅ LOAD DOCUMENT FIRST
+    from docx import Document
+    doc = Document(input_filename)
+
+    # ✅ PASS DOCUMENT OBJECT INTO PARSER
+    parser = SemanticResumeParser(doc, openai_client=client)
     resume_model = parser.parse()
 
-    # STEP 2 — Tailor
+    print("==== PARSE DEBUG ====")
+    print("Summary:", resume_model.get("summary"))
+    print("Skills count:", len(resume_model.get("skills", [])))
+    print("Experience roles:", len(resume_model.get("experience", [])))
+    print("==== PARSE DEBUG END ====")
+
+    # ✅ PASS SAME MODEL INTO TAILOR ENGINE
     tailor_engine = ResumeTailorEngine(
         resume_model=resume_model,
         job_description=job_description,
@@ -260,9 +274,7 @@ async def tailor_resume_docx_preserve(
 
     tailor_engine.tailor()
 
-    # STEP 3 — Save
-    from docx import Document
-    doc = Document(input_filename)
+    # ✅ SAVE THE SAME DOCUMENT OBJECT
     doc.save(output_filename)
 
     from fastapi.responses import FileResponse
