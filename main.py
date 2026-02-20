@@ -4,6 +4,8 @@ import shutil
 import os
 import re
 from openai import OpenAI
+from semantic_parser import SemanticResumeParser
+from resume_tailor import ResumeTailorEngine
 
 app = FastAPI()
 
@@ -230,151 +232,34 @@ async def debug_parse(file: UploadFile = File(...)):
 async def tailor_resume_docx_preserve(
     file: UploadFile = File(...),
     job_description: str = Body(...),
-    mode: str = Body("balanced")  # "balanced" or "aggressive"
+    mode: str = Body("balanced")
 ):
-    input_filename = f"input_{uuid.uuid4()}.docx"
-    output_filename = f"tailored_{uuid.uuid4()}.docx"
+    input_filename = "input.docx"
+    output_filename = "tailored.docx"
 
-    # Save uploaded file
     with open(input_filename, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    
-    # Parse structure
+
+    # STEP 1 — Parse
     parser = SemanticResumeParser(input_filename, openai_client=client)
     resume_model = parser.parse()
 
+    # STEP 2 — Tailor
+    tailor_engine = ResumeTailorEngine(
+        resume_model=resume_model,
+        job_description=job_description,
+        openai_client=client,
+        mode=mode
+    )
+
+    tailor_engine.tailor()
+
+    # STEP 3 — Save
+    from docx import Document
     doc = Document(input_filename)
-
-    # =============================
-    # INDUSTRY + MODE DETECTION
-    # =============================
-    resume_text = extract_text_from_docx(input_filename)
-
-    resume_industry = detect_industry_keywords(resume_text)
-    job_industry = detect_industry_keywords(job_description)
-
-    if max(resume_industry.values()) == 0 or max(job_industry.values()) == 0:
-        industry_mismatch = False
-    else:
-        resume_primary = max(resume_industry, key=resume_industry.get)
-        job_primary = max(job_industry, key=job_industry.get)
-        industry_mismatch = resume_primary != job_primary
-
-    if industry_mismatch:
-        mode = "conservative"
-
-    # =============================
-    # HELPER: SAFE GPT REWRITE
-    # =============================
-    def safe_rewrite(original_lines, prompt_body):
-        if not original_lines:
-            return original_lines
-
-        prompt = f"""
-STRICT OUTPUT RULES:
-- MODE: {mode}
-- Do NOT add numbering
-- Do NOT add prefixes like "Skill:" or "Improved:"
-- Do NOT add section headers
-- Do NOT fabricate metrics or achievements
-- Do NOT change companies, roles, dates, or industries
-- Keep EXACT same number of lines
-- Preserve meaning and structure
-- Return plain text only
-- No extra commentary
-
-Return EXACTLY {len(original_lines)} lines.
-
-CONTENT TO REWRITE:
-{chr(10).join(original_lines)}
-
-JOB DESCRIPTION:
-{job_description}
-"""
-
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a professional resume optimization engine."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-
-        output_lines = response.choices[0].message.content.strip().split("\n")
-
-        # Safety guard
-        if len(output_lines) != len(original_lines):
-            return original_lines
-
-        return output_lines
-
-    # =============================
-    # PROFILE SECTION
-    # =============================
-    profile_paragraphs = get_section_paragraphs_universal(
-        doc,
-        ["PROFILE", "PROFESSIONAL SUMMARY", "SUMMARY", "OBJECTIVE"]
-    )
-
-    if profile_paragraphs:
-        original_lines = [p.text.strip() for p in profile_paragraphs]
-        new_lines = safe_rewrite(original_lines, "Rewrite profile section.")
-
-        for i, paragraph in enumerate(profile_paragraphs):
-            replace_paragraph_text_preserve_style(paragraph, new_lines[i])
-
-    # =============================
-    # CORE COMPETENCIES
-    # =============================
-    skills_paragraphs = get_section_paragraphs_universal(
-        doc,
-        ["CORE COMPETENCIES", "SKILLS", "TECHNICAL SKILLS", "KEY SKILLS"]
-    )
-
-    if skills_paragraphs:
-        original_lines = [p.text.strip() for p in skills_paragraphs]
-        new_lines = safe_rewrite(original_lines, "Optimize skills section.")
-
-        for i, paragraph in enumerate(skills_paragraphs):
-            replace_paragraph_text_preserve_style(paragraph, new_lines[i])
-
-    # =============================
-    # EXPERIENCE RELEVANCE TARGETING
-    # =============================
-    roles = get_experience_roles(doc)
-
-    if roles:
-        job_keywords = extract_keywords(job_description)
-
-        scored_roles = []
-        for role in roles:
-            score = role_relevance_score(role, job_keywords)
-            scored_roles.append((role, score))
-
-        scored_roles.sort(key=lambda x: x[1], reverse=True)
-
-        RELEVANCE_THRESHOLD = 1 if mode == "balanced" else 3
-
-        for role, score in scored_roles:
-
-            if score < RELEVANCE_THRESHOLD:
-                continue
-
-            bullet_paragraphs = role["bullets"]
-            original_bullets = [p.text.strip() for p in bullet_paragraphs]
-
-            if not original_bullets:
-                continue
-
-            new_bullets = safe_rewrite(original_bullets, "Rewrite experience bullets.")
-
-            for i, paragraph in enumerate(bullet_paragraphs):
-                replace_paragraph_text_preserve_style(paragraph, new_bullets[i])
-
-    # =============================
-    # SAVE & RETURN
-    # =============================
     doc.save(output_filename)
+
+    from fastapi.responses import FileResponse
 
     return FileResponse(
         output_filename,
