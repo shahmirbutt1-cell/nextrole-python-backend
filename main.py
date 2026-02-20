@@ -218,18 +218,21 @@ import uuid
 @app.post("/tailor-resume-docx-preserve")
 async def tailor_resume_docx_preserve(
     file: UploadFile = File(...),
-    job_description: str = Body(...)
+    job_description: str = Body(...),
+    mode: str = Body("balanced")  # "balanced" or "aggressive"
 ):
-
     input_filename = f"input_{uuid.uuid4()}.docx"
     output_filename = f"tailored_{uuid.uuid4()}.docx"
 
+    # Save uploaded file
     with open(input_filename, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
     doc = Document(input_filename)
 
-    # -------- INDUSTRY DETECTION --------
+    # =============================
+    # INDUSTRY + MODE DETECTION
+    # =============================
     resume_text = extract_text_from_docx(input_filename)
 
     resume_industry = detect_industry_keywords(resume_text)
@@ -242,9 +245,57 @@ async def tailor_resume_docx_preserve(
         job_primary = max(job_industry, key=job_industry.get)
         industry_mismatch = resume_primary != job_primary
 
-    mode = "conservative" if industry_mismatch else "balanced"
+    if industry_mismatch:
+        mode = "conservative"
 
-    # ================= PROFILE =================
+    # =============================
+    # HELPER: SAFE GPT REWRITE
+    # =============================
+    def safe_rewrite(original_lines, prompt_body):
+        if not original_lines:
+            return original_lines
+
+        prompt = f"""
+STRICT OUTPUT RULES:
+- MODE: {mode}
+- Do NOT add numbering
+- Do NOT add prefixes like "Skill:" or "Improved:"
+- Do NOT add section headers
+- Do NOT fabricate metrics or achievements
+- Do NOT change companies, roles, dates, or industries
+- Keep EXACT same number of lines
+- Preserve meaning and structure
+- Return plain text only
+- No extra commentary
+
+Return EXACTLY {len(original_lines)} lines.
+
+CONTENT TO REWRITE:
+{chr(10).join(original_lines)}
+
+JOB DESCRIPTION:
+{job_description}
+"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a professional resume optimization engine."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        output_lines = response.choices[0].message.content.strip().split("\n")
+
+        # Safety guard
+        if len(output_lines) != len(original_lines):
+            return original_lines
+
+        return output_lines
+
+    # =============================
+    # PROFILE SECTION
+    # =============================
     profile_paragraphs = get_section_paragraphs_universal(
         doc,
         ["PROFILE", "PROFESSIONAL SUMMARY", "SUMMARY", "OBJECTIVE"]
@@ -252,147 +303,63 @@ async def tailor_resume_docx_preserve(
 
     if profile_paragraphs:
         original_lines = [p.text.strip() for p in profile_paragraphs]
+        new_lines = safe_rewrite(original_lines, "Rewrite profile section.")
 
-        prompt = f"""
-Rewrite each line individually.
+        for i, paragraph in enumerate(profile_paragraphs):
+            replace_paragraph_text_preserve_style(paragraph, new_lines[i])
 
-MODE: {mode}
-
-STRICT RULES:
-- Do NOT invent achievements
-- Do NOT fabricate metrics
-- Do NOT change industries
-- Only strengthen wording
-
-Return EXACTLY {len(original_lines)} lines.
-
-Lines:
-{chr(10).join(original_lines)}
-
-Job Description:
-{job_description}
-"""
-
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are an expert resume editor."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-
-        new_lines = response.choices[0].message.content.strip().split("\n")
-
-        if len(new_lines) != len(original_lines):
-            new_lines = original_lines
-
-        for i in range(len(profile_paragraphs)):
-            replace_paragraph_text_preserve_style(profile_paragraphs[i], new_lines[i])
-
-    # ================= SKILLS =================
+    # =============================
+    # CORE COMPETENCIES
+    # =============================
     skills_paragraphs = get_section_paragraphs_universal(
         doc,
         ["CORE COMPETENCIES", "SKILLS", "TECHNICAL SKILLS", "KEY SKILLS"]
     )
 
-    for paragraph in skills_paragraphs:
+    if skills_paragraphs:
+        original_lines = [p.text.strip() for p in skills_paragraphs]
+        new_lines = safe_rewrite(original_lines, "Optimize skills section.")
 
-        original_text = paragraph.text.strip()
+        for i, paragraph in enumerate(skills_paragraphs):
+            replace_paragraph_text_preserve_style(paragraph, new_lines[i])
 
-        if not original_text:
-            continue
-
-        prompt = f"""
-Improve this skill line.
-
-MODE: {mode}
-
-STRICT RULES:
-- Do NOT add new skills
-- Do NOT remove skills
-- Do NOT change industry
-- Keep structure similar
-
-Skill:
-{original_text}
-
-Job Description:
-{job_description}
-"""
-
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are an expert resume optimizer."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-
-        new_text = response.choices[0].message.content.strip()
-
-        replace_paragraph_text_preserve_style(paragraph, new_text)
-
-    # ================= EXPERIENCE =================
+    # =============================
+    # EXPERIENCE RELEVANCE TARGETING
+    # =============================
     roles = get_experience_roles(doc)
-    job_keywords = extract_keywords(job_description)
 
-    for role in roles:
+    if roles:
+        job_keywords = extract_keywords(job_description)
 
-        score = role_relevance_score(role, job_keywords)
+        scored_roles = []
+        for role in roles:
+            score = role_relevance_score(role, job_keywords)
+            scored_roles.append((role, score))
 
-        if score < 3:
-            continue
+        scored_roles.sort(key=lambda x: x[1], reverse=True)
 
-        bullet_paragraphs = role["bullets"]
-        original_bullets = [p.text.strip() for p in bullet_paragraphs]
+        RELEVANCE_THRESHOLD = 1 if mode == "balanced" else 3
 
-        if not original_bullets:
-            continue
+        for role, score in scored_roles:
 
-        prompt = f"""
-Rewrite each bullet individually.
+            if score < RELEVANCE_THRESHOLD:
+                continue
 
-MODE: {mode}
+            bullet_paragraphs = role["bullets"]
+            original_bullets = [p.text.strip() for p in bullet_paragraphs]
 
-STRICT RULES:
-- Do NOT invent responsibilities
-- Do NOT fabricate metrics
-- Do NOT change industry
-- Do NOT change companies or dates
-- Only strengthen wording
+            if not original_bullets:
+                continue
 
-Return EXACTLY {len(original_bullets)} bullets.
+            new_bullets = safe_rewrite(original_bullets, "Rewrite experience bullets.")
 
-Bullets:
-{chr(10).join(original_bullets)}
+            for i, paragraph in enumerate(bullet_paragraphs):
+                replace_paragraph_text_preserve_style(paragraph, new_bullets[i])
 
-Job Description:
-{job_description}
-"""
-
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are an expert resume optimizer."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-
-        new_bullets = response.choices[0].message.content.strip().split("\n")
-
-        if len(new_bullets) != len(original_bullets):
-            new_bullets = original_bullets
-
-        for i in range(len(bullet_paragraphs)):
-            replace_paragraph_text_preserve_style(
-                bullet_paragraphs[i],
-                new_bullets[i]
-            )
-
+    # =============================
+    # SAVE & RETURN
+    # =============================
     doc.save(output_filename)
-
-    if os.path.exists(input_filename):
-        os.remove(input_filename)
 
     return FileResponse(
         output_filename,
