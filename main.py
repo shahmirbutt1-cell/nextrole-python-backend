@@ -226,6 +226,12 @@ async def debug_parse(file: UploadFile = File(...)):
     parser = SemanticResumeParser(input_filename, openai_client=client)
     model = parser.parse()
 
+    print("==== PARSE DEBUG ====")
+    print("Summary:", resume_model.get("summary"))
+    print("Skills count:", len(resume_model.get("skills", [])))
+    print("Experience roles:", len(resume_model.get("experience", [])))
+    
+
     return model
 
 @app.post("/tailor-resume-docx-preserve")
