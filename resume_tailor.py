@@ -24,19 +24,17 @@ class ResumeTailorEngine:
 
     def _safe_rewrite(self, original_lines: List[str]) -> List[str]:
 
-        if not original_lines:
-            return original_lines
+    if not original_lines:
+        return original_lines
 
-        prompt = f"""
+    prompt = f"""
 STRICT OUTPUT RULES:
 - MODE: {self.mode}
 - Do NOT add numbering
-- Do NOT add prefixes like "Skill:" or "Revised:"
+- Do NOT add prefixes
 - Do NOT add section headers
-- Do NOT fabricate metrics or achievements
-- Do NOT change companies, roles, dates, or industries
+- Do NOT fabricate metrics
 - Keep EXACT same number of lines
-- Preserve meaning
 - Return plain text only
 - No commentary
 
@@ -49,21 +47,30 @@ JOB DESCRIPTION:
 {self.job_description}
 """
 
-        response = self.client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a professional resume optimization engine."},
-                {"role": "user", "content": prompt}
-            ]
-        )
+    response = self.client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are a professional resume optimization engine."},
+            {"role": "user", "content": prompt}
+        ]
+    )
 
-        output = response.choices[0].message.content.strip().split("\n")
+    raw_output = response.choices[0].message.content.strip()
 
-        if len(output) != len(original_lines):
-            return original_lines
+    output = [
+        line.strip()
+        for line in raw_output.split("\n")
+        if line.strip()
+    ]
 
-        return output
+    # Adjust length instead of reverting
+    if len(output) < len(original_lines):
+        output += original_lines[len(output):]
 
+    elif len(output) > len(original_lines):
+        output = output[:len(original_lines)]
+
+    return output
     # =========================================
     # SUMMARY
     # =========================================
