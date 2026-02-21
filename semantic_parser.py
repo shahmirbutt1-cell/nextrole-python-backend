@@ -1,23 +1,28 @@
-import re
 import json
-from typing import Dict, Any, List
+import re
+from typing import Any, Dict, List, Union
+
 from docx import Document
 
 
 class SemanticResumeParser:
-
-    def __init__(self, file_path: str, openai_client=None):
-        self.file_path = file_path
-        self.doc = Document(file_path)
+    def __init__(self, source: Union[str, Any], openai_client=None):
         self.client = openai_client
-        self.paragraphs = []
-        self.sections = {}
+        self.paragraphs: List[Dict[str, Any]] = []
+        self.sections: Dict[str, List[Dict[str, Any]]] = {}
         self.resume_model = {
             "summary": None,
             "skills": [],
             "experience": [],
             "education": []
         }
+
+        if hasattr(source, "paragraphs") and hasattr(source, "tables"):
+            self.file_path = None
+            self.doc = source
+        else:
+            self.file_path = source
+            self.doc = Document(source)
 
     # =========================================
     # PUBLIC ENTRY
@@ -37,7 +42,6 @@ class SemanticResumeParser:
     # =========================================
 
     def _extract_paragraphs(self):
-
         def capture_paragraph(p):
             return {
                 "text": p.text.strip(),
@@ -46,12 +50,12 @@ class SemanticResumeParser:
                 "object": p
             }
 
-        # Normal paragraphs
+        self.paragraphs = []
+
         for p in self.doc.paragraphs:
             if p.text.strip():
                 self.paragraphs.append(capture_paragraph(p))
 
-        # Table paragraphs
         for table in self.doc.tables:
             for row in table.rows:
                 for cell in row.cells:
@@ -60,11 +64,10 @@ class SemanticResumeParser:
                             self.paragraphs.append(capture_paragraph(p))
 
     # =========================================
-    # STEP 2 — GPT SECTION VALIDATION
+    # STEP 2 — SECTION DETECTION
     # =========================================
 
     def _identify_header_candidates(self):
-
         candidates = []
 
         for p in self.paragraphs:
@@ -79,9 +82,8 @@ class SemanticResumeParser:
         return candidates
 
     def _validate_headers_with_gpt(self, candidates):
-
         if not self.client or not candidates:
-            return {}
+            return None
 
         header_texts = [p["text"] for p in candidates]
 
@@ -114,14 +116,60 @@ Headers:
             ]
         )
 
+        content = response.choices[0].message.content.strip()
+
         try:
-            content = response.choices[0].message.content.strip()
-            return json.loads(content)
-        except:
-            return {}
+            parsed = json.loads(content)
+        except Exception:
+            return None
+
+        if not isinstance(parsed, dict):
+            return None
+
+        allowed = {"summary", "skills", "experience", "education", "none"}
+        if any(label not in allowed for label in parsed.values()):
+            return None
+
+        return parsed
+
+    def _classify_header_fallback(self, text: str):
+        normalized = re.sub(r"[^a-z\s]", "", text.lower()).strip()
+
+        rules = {
+            "summary": [
+                r"^summary$",
+                r"^professional summary$",
+                r"^profile$",
+                r"^career summary$",
+                r"^about$"
+            ],
+            "skills": [
+                r"^skills$",
+                r"^technical skills$",
+                r"^core competencies$",
+                r"^competencies$",
+                r"^tools$"
+            ],
+            "experience": [
+                r"^experience$",
+                r"^work experience$",
+                r"^professional experience$",
+                r"^employment history$"
+            ],
+            "education": [
+                r"^education$",
+                r"^academic background$",
+                r"^qualifications$"
+            ]
+        }
+
+        for label, patterns in rules.items():
+            if any(re.match(pattern, normalized) for pattern in patterns):
+                return label
+
+        return None
 
     def _detect_sections(self):
-
         section_map = {
             "summary": [],
             "skills": [],
@@ -131,6 +179,12 @@ Headers:
 
         candidates = self._identify_header_candidates()
         gpt_classification = self._validate_headers_with_gpt(candidates)
+
+        if not gpt_classification:
+            gpt_classification = {
+                p["text"]: self._classify_header_fallback(p["text"]) or "none"
+                for p in candidates
+            }
 
         current_section = None
 
@@ -142,10 +196,10 @@ Headers:
 
                 if label in section_map:
                     current_section = label
-                    continue
                 else:
                     current_section = None
-                    continue
+
+                continue
 
             if current_section:
                 section_map[current_section].append(p)
@@ -175,19 +229,10 @@ Headers:
         skills_paragraphs = self.sections.get("skills", [])
 
         for p in skills_paragraphs:
-
-            if "," in p["text"]:
-                split_skills = [s.strip() for s in p["text"].split(",") if s.strip()]
-                for skill in split_skills:
-                    self.resume_model["skills"].append({
-                        "text": skill,
-                        "paragraph": p
-                    })
-            else:
-                self.resume_model["skills"].append({
-                    "text": p["text"],
-                    "paragraph": p
-                })
+            self.resume_model["skills"].append({
+                "text": p["text"],
+                "paragraph": p
+            })
 
     # =========================================
     # STEP 5 — EXPERIENCE
@@ -203,7 +248,6 @@ Headers:
             text = p["text"]
 
             if self._is_role_header(p):
-
                 if current_role:
                     roles.append(current_role)
 
@@ -215,9 +259,8 @@ Headers:
 
                 continue
 
-            if self._is_bullet(p):
-                if current_role:
-                    current_role["bullets"].append(p)
+            if self._is_bullet(p) and current_role:
+                current_role["bullets"].append(p)
 
         if current_role:
             roles.append(current_role)
@@ -225,7 +268,6 @@ Headers:
         self.resume_model["experience"] = roles
 
     def _is_role_header(self, paragraph):
-
         text = paragraph["text"]
 
         if paragraph["bold"]:
@@ -240,7 +282,6 @@ Headers:
         return False
 
     def _is_bullet(self, paragraph):
-
         text = paragraph["text"]
         style = paragraph["style"]
 
