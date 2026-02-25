@@ -12,6 +12,10 @@ from pydantic import BaseModel
 
 from resume_tailor import ResumeTailorEngine
 from semantic_parser import SemanticResumeParser
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["*"], allow_headers=["*"])
 
 logging.basicConfig(level=logging.INFO)
 
